@@ -6,7 +6,7 @@ class WindowManager {
       this.channel = new BroadcastChannel(channelName);
       this.peers = new Map();                         // Map<peerId, { x, y, lastSeen }>
   
-      // Start broadcasting our window’s position
+      // Start broadcasting our window's position
       this._startBroadcast();
   
       // Listen for incoming messages from other windows
@@ -38,7 +38,7 @@ class WindowManager {
     }
   
     /**
-     * Returns an array of other windows’ positions:
+     * Returns an array of other windows' positions:
      * [ { id, x, y }, ... ]
      */
     getPeers() {
