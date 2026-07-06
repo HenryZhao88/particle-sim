@@ -140,6 +140,13 @@ function createCommandUi({ initialWarp, onWarpChange }) {
 }
 
 export default function init() {
+  // The store's coordinate convention changed (world-space content origins);
+  // drop any entries written by older code so windows never mix conventions.
+  if (localStorage.getItem('schema_version') !== '2') {
+    localStorage.removeItem('windows');
+    localStorage.setItem('schema_version', '2');
+  }
+
   const windowId = crypto.randomUUID();
   let windows = null;
   const setWindows = (next) => { windows = next; };

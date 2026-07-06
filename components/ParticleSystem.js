@@ -96,9 +96,9 @@ float smin(float a, float b, float k){
 }
 
 float bridgeRadius(float ra, float rb, float t){
-  float nearR = max(36.0, ra * 0.42);
-  float farR = max(30.0, rb * 0.62);
-  float waist = 1.0 - 0.15 * sin(3.14159 * t);
+  float nearR = max(28.0, ra * 0.30);
+  float farR = max(20.0, rb * 0.45);
+  float waist = 1.0 - 0.25 * sin(3.14159 * t);
   return mix(nearR, farR, smoothstep(0.0, 1.0, t)) * waist;
 }
 
@@ -127,10 +127,10 @@ vec4 nearestBridgeFlow(vec3 p){
       if (distToRail < bestDist){
         bestDist = distToRail;
         float r = bridgeRadius(uRadius, rin, t);
-        // Very wide, soft capture band so the stream stays fluffy.
-        influence = 1.0 - smoothstep(r * 1.2, r * 4.0 + 120.0, distToRail);
+        // Soft capture band: fluffy edges without a huge halo.
+        influence = 1.0 - smoothstep(r * 1.1, r * 2.5 + 70.0, distToRail);
         // Long, gentle end fades so dust never dams up at either mouth.
-        influence *= smoothstep(0.0, 0.10, t) * (1.0 - smoothstep(0.70, 0.98, t));
+        influence *= smoothstep(0.0, 0.10, t) * (1.0 - smoothstep(0.85, 1.0, t));
         dir = normalize(ab);
       }
     }
@@ -152,6 +152,30 @@ float sdf(vec3 p){
   }
   return d;
 }
+
+// Travelers bind to the bridge network only (funnels + far swirls), so the
+// span stays permanently dense instead of relying on strays drifting in.
+float sdfTraveler(vec3 p){
+  float d = 1e6;
+  for (int i = 0; i < ${MAX_OTHERS}; i++){
+    if (i >= uOtherCount) break;
+    vec3 c = uOthers[i];
+    float rin = uOtherInner[i];
+    if (distance(uOwn, c) > uRadius){
+      d = smin(d, sdFunnel(p, uOwn, c, uRadius, rin), 48.0);
+      d = smin(d, length(p - c) - rin, 48.0);
+    }
+  }
+  return d;
+}
+
+float field(vec3 p, float traveler){
+  if (traveler > 0.5 && uOtherCount > 0){
+    float dB = sdfTraveler(p);
+    if (dB < 1e5) return dB;
+  }
+  return sdf(p);
+}
 `;
 
 const VELOCITY_SHADER = /* glsl */`
@@ -166,32 +190,38 @@ ${SDF_GLSL}
 
 void main(){
   vec2 uv = gl_FragCoord.xy / resolution.xy;
-  vec3 pos = texture2D(texturePosition, uv).xyz;
+  vec4 posRole = texture2D(texturePosition, uv);
+  vec3 pos = posRole.xyz;
+  float traveler = step(0.65, posRole.w); // ~35% live in the bridge network
   vec3 vel = texture2D(textureVelocity, uv).xyz;
 
   vec3 rel = pos - uOwn;
   float l = length(rel) + 1e-5;
   float speed = length(uOwnVel);
 
-  // Spring toward the implicit surface. Fast window motion loosens the
-  // dust's grip so it smears and trails behind.
-  float d = sdf(pos);
+  // Spring toward the implicit surface (residents: shell + bridge blend;
+  // travelers: bridge network only). Fast window motion loosens the grip
+  // so dust smears and trails behind.
+  float d = field(pos, traveler);
   vec2 k = vec2(1.0, -1.0);
   const float h = 2.0;
   vec3 n = normalize(
-    k.xyy * sdf(pos + k.xyy * h) +
-    k.yyx * sdf(pos + k.yyx * h) +
-    k.yxy * sdf(pos + k.yxy * h) +
-    k.xxx * sdf(pos + k.xxx * h) + vec3(1e-6));
+    k.xyy * field(pos + k.xyy * h, traveler) +
+    k.yyx * field(pos + k.yyx * h, traveler) +
+    k.yxy * field(pos + k.yxy * h, traveler) +
+    k.xxx * field(pos + k.xxx * h, traveler) + vec3(1e-6));
   // Near the bridge the surface grip relaxes, letting dust drift loosely
   // around the tube instead of getting pinned onto it.
   vec4 flow = nearestBridgeFlow(pos);
   float grip = 1.0 / (1.0 + speed * 0.003);
   grip *= 1.0 - 0.5 * flow.w;
-  vel += -n * clamp(d, -300.0, 300.0) * 14.0 * grip * uDt;
+  // Travelers are held a touch more loosely: fuzzy edges, tight core.
+  float stiffness = mix(14.0, 11.5, traveler);
+  vel += -n * clamp(d, -300.0, 300.0) * stiffness * grip * uDt;
 
-  // Stream dust along the bridge span; density comes from transport.
-  vel += flow.xyz * 170.0 * flow.w * uDt;
+  // Stream dust along the bridge span; travelers ride it hard, residents
+  // only feel a gentle drift near the mouth.
+  vel += flow.xyz * mix(40.0, 210.0, traveler) * flow.w * uDt;
 
   // Wispy filaments; motion and jolts whip up extra turbulence.
   float curlStrength = 420.0 * (1.0 + min(speed / 350.0, 1.6) + min(uKick / 2500.0, 1.4));
@@ -229,6 +259,9 @@ uniform float uDt;
 uniform vec3 uOwn;
 uniform float uRadius;
 uniform float uRecycleRadius;
+uniform vec3 uOthers[${MAX_OTHERS}];
+uniform float uOtherInner[${MAX_OTHERS}];
+uniform int uOtherCount;
 
 float hash12(vec2 p){
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -238,10 +271,31 @@ float hash12(vec2 p){
 
 void main(){
   vec2 uv = gl_FragCoord.xy / resolution.xy;
-  vec3 pos = texture2D(texturePosition, uv).xyz;
+  vec4 posRole = texture2D(texturePosition, uv);
+  vec3 pos = posRole.xyz;
+  float role = posRole.w;
   vec3 vel = texture2D(textureVelocity, uv).xyz;
 
   pos += vel * uDt;
+
+  // Conveyor: travelers that reached a far swirl hop back to this side's
+  // bridge mouth, keeping the span permanently supplied with dust.
+  if (role > 0.65){
+    for (int i = 0; i < ${MAX_OTHERS}; i++){
+      if (i >= uOtherCount) break;
+      vec3 c = uOthers[i];
+      if (distance(pos, c) < uOtherInner[i] * 0.8 &&
+          hash12(uv + fract(uTime)) < 0.02){
+        vec3 dir = normalize(c - uOwn + vec3(1e-3));
+        vec3 lat = normalize(vec3(-dir.y, dir.x, 0.35));
+        float h1 = hash12(uv * 3.1 + fract(uTime * 0.53));
+        float h2 = hash12(uv * 7.7 + fract(uTime * 0.31));
+        pos = uOwn
+            + dir * uRadius * (0.45 + 0.45 * h1)
+            + lat * (h2 - 0.5) * uRadius * 0.9;
+      }
+    }
+  }
 
   // Recycle strays and numeric blowups, but keep long bridge spans alive.
   if (!(length(pos - uOwn) < uRecycleRadius)){
@@ -251,7 +305,7 @@ void main(){
     pos = uOwn + vec3(rr * cos(a), rr * sin(a), z) * uRadius;
   }
 
-  gl_FragColor = vec4(pos, 1.0);
+  gl_FragColor = vec4(pos, role);
 }
 `;
 
@@ -329,7 +383,7 @@ export default class ParticleSystem {
       pArr[i * 4] = center[0] + rr * Math.cos(a) * r;
       pArr[i * 4 + 1] = center[1] + rr * Math.sin(a) * r;
       pArr[i * 4 + 2] = z * r;
-      pArr[i * 4 + 3] = 1;
+      pArr[i * 4 + 3] = rand(); // role: > 0.65 becomes a bridge traveler
       vArr[i * 4] = (rand() - 0.5) * 20;
       vArr[i * 4 + 1] = (rand() - 0.5) * 20;
       vArr[i * 4 + 2] = (rand() - 0.5) * 20;
@@ -363,7 +417,10 @@ export default class ParticleSystem {
       uDt: { value: 0 },
       uOwn: { value: new THREE.Vector3(...center) },
       uRadius: { value: radius },
-      uRecycleRadius: { value: radius * 8 }
+      uRecycleRadius: { value: radius * 8 },
+      uOthers: { value: new Array(MAX_OTHERS).fill().map(() => new THREE.Vector3()) },
+      uOtherInner: { value: new Float32Array(MAX_OTHERS) },
+      uOtherCount: { value: 0 }
     });
 
     const error = this.gpu.init();
@@ -428,6 +485,8 @@ export default class ParticleSystem {
     for (let i = 0; i < n; i++) {
       this.velUniforms.uOthers.value[i].set(...others[i].center);
       this.velUniforms.uOtherInner.value[i] = others[i].radius * 0.35;
+      this.posUniforms.uOthers.value[i].set(...others[i].center);
+      this.posUniforms.uOtherInner.value[i] = others[i].radius * 0.35;
 
       const [x, y, z] = others[i].center;
       const dx = x - own.x;
@@ -440,6 +499,7 @@ export default class ParticleSystem {
       );
     }
     this.velUniforms.uOtherCount.value = n;
+    this.posUniforms.uOtherCount.value = n;
     this.posUniforms.uRecycleRadius.value = recycleRadius;
   }
 
