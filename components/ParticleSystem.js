@@ -96,9 +96,9 @@ float smin(float a, float b, float k){
 }
 
 float bridgeRadius(float ra, float rb, float t){
-  float nearR = max(10.0, ra * 0.12);
-  float farR = max(10.0, rb * 0.24);
-  float waist = 1.0 - 0.18 * sin(3.14159 * t);
+  float nearR = max(30.0, ra * 0.34);
+  float farR = max(24.0, rb * 0.55);
+  float waist = 1.0 - 0.25 * sin(3.14159 * t);
   return mix(nearR, farR, smoothstep(0.0, 1.0, t)) * waist;
 }
 
@@ -110,10 +110,11 @@ float sdFunnel(vec3 p, vec3 a, vec3 b, float ra, float rb){
   return distance(p, a + ab * t) - r;
 }
 
-vec4 nearestBridgeRail(vec3 p){
-  vec3 closest = p;
+// xyz = flow direction along the nearest bridge, w = influence 0..1
+vec4 nearestBridgeFlow(vec3 p){
+  vec3 dir = vec3(0.0);
   float bestDist = 1e20;
-  float bestRadius = 1.0;
+  float influence = 0.0;
 
   for (int i = 0; i < ${MAX_OTHERS}; i++){
     if (i >= uOtherCount) break;
@@ -122,18 +123,20 @@ vec4 nearestBridgeRail(vec3 p){
     if (distance(uOwn, c) > uRadius){
       vec3 ab = c - uOwn;
       float t = clamp(dot(p - uOwn, ab) / max(dot(ab, ab), 1.0), 0.0, 1.0);
-      vec3 q = uOwn + ab * t;
-      float distToRail = distance(p, q);
+      float distToRail = distance(p, uOwn + ab * t);
       if (distToRail < bestDist){
-        closest = q;
         bestDist = distToRail;
-        bestRadius = bridgeRadius(uRadius, rin, t);
+        float r = bridgeRadius(uRadius, rin, t);
+        // Wide, soft capture band so the stream stays fluffy.
+        influence = 1.0 - smoothstep(r, r * 3.0 + 60.0, distToRail);
+        // No blasting inside either sphere: flow only along the open span.
+        influence *= smoothstep(0.02, 0.18, t) * (1.0 - smoothstep(0.82, 0.98, t));
+        dir = normalize(ab);
       }
     }
   }
 
-  float influence = 1.0 - smoothstep(bestRadius * 1.25, bestRadius * 7.0 + 24.0, bestDist);
-  return vec4(closest, influence);
+  return vec4(dir, influence);
 }
 
 float sdf(vec3 p){
@@ -156,6 +159,8 @@ uniform float uTime;
 uniform float uDt;
 uniform vec3 uAxis;
 uniform float uSeed;
+uniform vec3 uOwnVel;  // this window's center velocity, px/s in local coords
+uniform float uKick;   // smoothed acceleration magnitude, px/s^2
 ${NOISE_GLSL}
 ${SDF_GLSL}
 
@@ -164,9 +169,13 @@ void main(){
   vec3 pos = texture2D(texturePosition, uv).xyz;
   vec3 vel = texture2D(textureVelocity, uv).xyz;
 
-  // Spring toward the implicit surface.
+  vec3 rel = pos - uOwn;
+  float l = length(rel) + 1e-5;
+  float speed = length(uOwnVel);
+
+  // Spring toward the implicit surface. Fast window motion loosens the
+  // dust's grip so it smears and trails behind.
   float d = sdf(pos);
-  vec4 bridgeRail = nearestBridgeRail(pos);
   vec2 k = vec2(1.0, -1.0);
   const float h = 2.0;
   vec3 n = normalize(
@@ -174,18 +183,24 @@ void main(){
     k.yyx * sdf(pos + k.yyx * h) +
     k.yxy * sdf(pos + k.yxy * h) +
     k.xxx * sdf(pos + k.xxx * h) + vec3(1e-6));
-  vel += -n * clamp(d, -300.0, 300.0) * 14.0 * uDt;
-  vel += (bridgeRail.xyz - pos) * 7.0 * bridgeRail.w * uDt;
+  float grip = 1.0 / (1.0 + speed * 0.003);
+  vel += -n * clamp(d, -300.0, 300.0) * 14.0 * grip * uDt;
 
-  // Wispy filaments; quieter around bridge rails so the bridge reads straight.
-  float curlStrength = mix(420.0, 210.0, bridgeRail.w);
+  // Stream dust along the bridge span; density comes from transport.
+  vec4 flow = nearestBridgeFlow(pos);
+  vel += flow.xyz * 240.0 * flow.w * uDt;
+
+  // Wispy filaments; motion and jolts whip up extra turbulence.
+  float curlStrength = 420.0 * (1.0 + min(speed / 350.0, 1.6) + min(uKick / 2500.0, 1.4));
   vel += curlNoise(pos * (1.0 / 140.0) + vec3(uSeed) + uTime * 0.05) * curlStrength * uDt;
 
   // Coherent rotation, strongest on the shell.
-  vec3 rel = pos - uOwn;
-  float l = length(rel) + 1e-5;
   float shellW = exp(-abs(l - uRadius) / (uRadius * 0.5));
   vel += normalize(cross(uAxis, rel / l) + vec3(1e-6)) * 300.0 * shellW * uDt;
+
+  // Wake: the moving window sheds dust opposite its direction of travel.
+  float wakeW = exp(-max(0.0, l - uRadius * 1.2) / uRadius);
+  vel += -uOwnVel * 0.9 * wakeW * uDt;
 
   // Counter-rotation inside the other windows' spheres.
   for (int i = 0; i < ${MAX_OTHERS}; i++){
@@ -197,8 +212,9 @@ void main(){
   }
 
   vel *= exp(-2.2 * uDt);
+  float cap = 340.0 + speed;
   float sp = length(vel);
-  if (sp > 340.0) vel *= 340.0 / sp;
+  if (sp > cap) vel *= cap / sp;
 
   gl_FragColor = vec4(vel, 1.0);
 }
@@ -321,7 +337,9 @@ export default class ParticleSystem {
       uOtherInner: { value: inner },
       uOtherCount: { value: 0 },
       uAxis: { value: axis },
-      uSeed: { value: h * 100 }
+      uSeed: { value: h * 100 },
+      uOwnVel: { value: new THREE.Vector3() },
+      uKick: { value: 0 }
     });
     this.posUniforms = this.posVar.material.uniforms;
     Object.assign(this.posUniforms, {
@@ -376,6 +394,12 @@ export default class ParticleSystem {
     this.velUniforms.uRadius.value = radius;
     this.posUniforms.uOwn.value.set(...center);
     this.posUniforms.uRadius.value = radius;
+  }
+
+  /** This window's motion: center velocity (px/s) and acceleration kick. */
+  setMotion(vx, vy, kick) {
+    this.velUniforms.uOwnVel.value.set(vx, vy, 0);
+    this.velUniforms.uKick.value = kick;
   }
 
   /** The other windows' spheres: [{ center, radius }] */

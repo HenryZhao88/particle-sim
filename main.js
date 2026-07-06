@@ -184,6 +184,7 @@ export default function init() {
   });
 
   const systems = new Map(); // window id → ParticleSystem
+  const motion = new Map();  // window id → { x, y, vx, vy, kick }
 
   function syncEntities() {
     if (!windows || !windows[windowId]) return;
@@ -205,7 +206,36 @@ export default function init() {
       if (!ids.has(id)) {
         system.dispose();
         systems.delete(id);
+        motion.delete(id);
       }
+    }
+    return models;
+  }
+
+  // Estimate each window's center velocity and acceleration in local
+  // coordinates, smoothed so 100ms-quantized storage updates don't spike.
+  function trackMotion(models, dt) {
+    if (!models || dt < 1e-4) return;
+    for (const model of models) {
+      const system = systems.get(model.id);
+      if (!system) continue;
+      let m = motion.get(model.id);
+      if (!m) {
+        m = { x: model.center[0], y: model.center[1], vx: 0, vy: 0, kick: 0 };
+        motion.set(model.id, m);
+      }
+      const instVx = (model.center[0] - m.x) / dt;
+      const instVy = (model.center[1] - m.y) / dt;
+      const s = 1 - Math.exp(-dt * 10);
+      const vx = m.vx + (instVx - m.vx) * s;
+      const vy = m.vy + (instVy - m.vy) * s;
+      const acc = Math.hypot(vx - m.vx, vy - m.vy) / dt;
+      m.kick = Math.max(m.kick * Math.exp(-3 * dt), Math.min(acc, 4000));
+      m.x = model.center[0];
+      m.y = model.center[1];
+      m.vx = vx;
+      m.vy = vy;
+      system.setMotion(vx, vy, m.kick);
     }
   }
 
@@ -223,7 +253,8 @@ export default function init() {
   function animate() {
     const dt = Math.min(clock.getDelta(), 1 / 30);
 
-    syncEntities();
+    const models = syncEntities();
+    trackMotion(models, dt);
     commandUi.setWindowCount(systems.size);
     for (let i = 0; i < warp; i++) {
       const stepDt = warp > 1 ? 1 / 60 : dt;
