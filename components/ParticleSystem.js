@@ -96,9 +96,9 @@ float smin(float a, float b, float k){
 }
 
 float bridgeRadius(float ra, float rb, float t){
-  float nearR = max(30.0, ra * 0.34);
-  float farR = max(24.0, rb * 0.55);
-  float waist = 1.0 - 0.25 * sin(3.14159 * t);
+  float nearR = max(36.0, ra * 0.42);
+  float farR = max(30.0, rb * 0.62);
+  float waist = 1.0 - 0.15 * sin(3.14159 * t);
   return mix(nearR, farR, smoothstep(0.0, 1.0, t)) * waist;
 }
 
@@ -127,10 +127,10 @@ vec4 nearestBridgeFlow(vec3 p){
       if (distToRail < bestDist){
         bestDist = distToRail;
         float r = bridgeRadius(uRadius, rin, t);
-        // Wide, soft capture band so the stream stays fluffy.
-        influence = 1.0 - smoothstep(r, r * 3.0 + 60.0, distToRail);
-        // No blasting inside either sphere: flow only along the open span.
-        influence *= smoothstep(0.02, 0.18, t) * (1.0 - smoothstep(0.82, 0.98, t));
+        // Very wide, soft capture band so the stream stays fluffy.
+        influence = 1.0 - smoothstep(r * 1.2, r * 4.0 + 120.0, distToRail);
+        // Long, gentle end fades so dust never dams up at either mouth.
+        influence *= smoothstep(0.0, 0.10, t) * (1.0 - smoothstep(0.70, 0.98, t));
         dir = normalize(ab);
       }
     }
@@ -146,8 +146,8 @@ float sdf(vec3 p){
     vec3 c = uOthers[i];
     float rin = uOtherInner[i];
     if (distance(uOwn, c) > uRadius){
-      d = smin(d, sdFunnel(p, uOwn, c, uRadius, rin), 28.0);
-      d = smin(d, length(p - c) - rin, 28.0);
+      d = smin(d, sdFunnel(p, uOwn, c, uRadius, rin), 48.0);
+      d = smin(d, length(p - c) - rin, 48.0);
     }
   }
   return d;
@@ -183,12 +183,15 @@ void main(){
     k.yyx * sdf(pos + k.yyx * h) +
     k.yxy * sdf(pos + k.yxy * h) +
     k.xxx * sdf(pos + k.xxx * h) + vec3(1e-6));
+  // Near the bridge the surface grip relaxes, letting dust drift loosely
+  // around the tube instead of getting pinned onto it.
+  vec4 flow = nearestBridgeFlow(pos);
   float grip = 1.0 / (1.0 + speed * 0.003);
+  grip *= 1.0 - 0.5 * flow.w;
   vel += -n * clamp(d, -300.0, 300.0) * 14.0 * grip * uDt;
 
   // Stream dust along the bridge span; density comes from transport.
-  vec4 flow = nearestBridgeFlow(pos);
-  vel += flow.xyz * 240.0 * flow.w * uDt;
+  vel += flow.xyz * 170.0 * flow.w * uDt;
 
   // Wispy filaments; motion and jolts whip up extra turbulence.
   float curlStrength = 420.0 * (1.0 + min(speed / 350.0, 1.6) + min(uKick / 2500.0, 1.4));
@@ -286,6 +289,18 @@ function hashString(str) {
   return (h >>> 0) / 4294967295;
 }
 
+// Seeded PRNG: every window must spawn identical particles for a given
+// system id, or the shared world wouldn't match across windows.
+function mulberry32(seed) {
+  let a = seed | 0;
+  return () => {
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 export default class ParticleSystem {
   constructor(renderer, scene, { id, color, center, radius }) {
     this.scene = scene;
@@ -301,22 +316,23 @@ export default class ParticleSystem {
     // --- Simulation ---------------------------------------------------------
     this.gpu = new GPUComputationRenderer(TEX_SIZE, TEX_SIZE, renderer);
 
+    const rand = mulberry32(Math.floor(h * 2 ** 31));
     const posTex = this.gpu.createTexture();
     const velTex = this.gpu.createTexture();
     const pArr = posTex.image.data;
     const vArr = velTex.image.data;
     for (let i = 0; i < TEX_SIZE * TEX_SIZE; i++) {
-      const a = Math.random() * Math.PI * 2;
-      const z = Math.random() * 2 - 1;
+      const a = rand() * Math.PI * 2;
+      const z = rand() * 2 - 1;
       const rr = Math.sqrt(Math.max(0, 1 - z * z));
-      const r = radius * (0.9 + Math.random() * 0.2);
+      const r = radius * (0.9 + rand() * 0.2);
       pArr[i * 4] = center[0] + rr * Math.cos(a) * r;
       pArr[i * 4 + 1] = center[1] + rr * Math.sin(a) * r;
       pArr[i * 4 + 2] = z * r;
       pArr[i * 4 + 3] = 1;
-      vArr[i * 4] = (Math.random() - 0.5) * 20;
-      vArr[i * 4 + 1] = (Math.random() - 0.5) * 20;
-      vArr[i * 4 + 2] = (Math.random() - 0.5) * 20;
+      vArr[i * 4] = (rand() - 0.5) * 20;
+      vArr[i * 4 + 1] = (rand() - 0.5) * 20;
+      vArr[i * 4 + 2] = (rand() - 0.5) * 20;
       vArr[i * 4 + 3] = 1;
     }
 
@@ -361,7 +377,7 @@ export default class ParticleSystem {
     for (let i = 0; i < count; i++) {
       refs[i * 2] = (i % TEX_SIZE) / TEX_SIZE + 0.5 / TEX_SIZE;
       refs[i * 2 + 1] = Math.floor(i / TEX_SIZE) / TEX_SIZE + 0.5 / TEX_SIZE;
-      rands[i] = Math.random();
+      rands[i] = rand();
     }
     this.geometry = new THREE.BufferGeometry();
     this.geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));

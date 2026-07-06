@@ -10,9 +10,11 @@ export const debounce = (func, wait) => {
   };
 };
 
+// Content-area origin in screen coords (accounts for browser chrome), so
+// every window agrees on one shared world coordinate space.
 export const getCurrentWindowDimensions = () => ({
   x: window.screenLeft,
-  y: window.screenTop,
+  y: window.screenTop + (window.outerHeight - window.innerHeight),
   width: window.innerWidth,
   height: window.innerHeight,
 });
@@ -20,13 +22,12 @@ export const getCurrentWindowDimensions = () => ({
 export const areDifferentDimensions = (a, b) =>
   a.x !== b.x || a.y !== b.y || a.width !== b.width || a.height !== b.height;
 
-export const getSphereModelsFromWindows = (windows, currentWindowId) => {
-  const currentWindowShape = windows[currentWindowId];
-
+// Sphere models in WORLD (screen) coordinates, y-down. Every window derives
+// the identical world from the shared store; rendering just points a camera
+// at its own rect, so the scene lines up seamlessly across windows.
+export const getSphereModelsFromWindows = (windows) => {
   return Object.entries(windows).map(([id, { x, y, width, height, color }]) => {
-    const centerX = -currentWindowShape.x + x + width / 2;
-    const centerY = currentWindowShape.y - y + currentWindowShape.height - height + height / 2;
-    const center = [centerX, centerY, 0];
+    const center = [x + width / 2, y + height / 2, 0];
     const radius = 0.3 * Math.min(width, height);
 
     return { center, color, id, radius };

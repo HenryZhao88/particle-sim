@@ -160,11 +160,27 @@ export default function init() {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color('black');
 
-  // Pixel-unit orthographic camera, y-up; wide z range so the 3D dust
-  // never clips.
-  const camera = new THREE.OrthographicCamera(
-    0, window.innerWidth, window.innerHeight, 0, -10000, 10000
-  );
+  // The camera is a viewport into shared world (screen) coordinates, y-down.
+  // It eases toward the window's actual rect, so dragging the window pans
+  // through the dust field with a trailing feel.
+  const camera = new THREE.OrthographicCamera(0, 1, 0, 1, -10000, 10000);
+  const contentOrigin = () => ({
+    x: window.screenLeft,
+    y: window.screenTop + (window.outerHeight - window.innerHeight)
+  });
+  let view = contentOrigin();
+
+  function updateCamera(dt) {
+    const target = contentOrigin();
+    const ease = 1 - Math.exp(-dt * 14);
+    view.x += (target.x - view.x) * ease;
+    view.y += (target.y - view.y) * ease;
+    camera.left = view.x;
+    camera.right = view.x + window.innerWidth;
+    camera.top = view.y;
+    camera.bottom = view.y + window.innerHeight;
+    camera.updateProjectionMatrix();
+  }
 
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
@@ -178,9 +194,6 @@ export default function init() {
   window.addEventListener('resize', () => {
     renderer.setSize(window.innerWidth, window.innerHeight);
     composer.setSize(window.innerWidth, window.innerHeight);
-    camera.right = window.innerWidth;
-    camera.top = window.innerHeight;
-    camera.updateProjectionMatrix();
   });
 
   const systems = new Map(); // window id → ParticleSystem
@@ -189,7 +202,7 @@ export default function init() {
   function syncEntities() {
     if (!windows || !windows[windowId]) return;
 
-    const models = getSphereModelsFromWindows(windows, windowId);
+    const models = getSphereModelsFromWindows(windows);
     const ids = new Set();
 
     for (const model of models) {
@@ -240,7 +253,7 @@ export default function init() {
   }
 
   const clock = new THREE.Clock();
-  // ?warp=N runs N fixed sim substeps per frame (dev: evolve the sim fast)
+  // ?warp=N multiplies the shared step rate (dev: evolve the sim fast).
   let warp = Math.max(1, parseInt(new URLSearchParams(window.location.search).get('warp'), 10) || 1);
   const commandUi = createCommandUi({
     initialWarp: warp,
@@ -248,19 +261,36 @@ export default function init() {
       warp = nextWarp;
     }
   });
-  let simTime = 0;
+
+  // Fixed-step simulation driven by a wall clock shared across windows
+  // (seconds since midnight), so every window computes the same dust field
+  // step-for-step and the scene lines up seamlessly at window boundaries.
+  const STEP_HZ = 60;
+  const STEP_DT = 1 / STEP_HZ;
+  const MAX_STEPS_PER_FRAME = 90;
+  const dayStart = new Date().setHours(0, 0, 0, 0);
+  const sharedSteps = () => Math.floor(((Date.now() - dayStart) / 1000) * STEP_HZ * warp);
+  let doneSteps = sharedSteps();
 
   function animate() {
     const dt = Math.min(clock.getDelta(), 1 / 30);
 
+    updateCamera(dt);
     const models = syncEntities();
     trackMotion(models, dt);
     commandUi.setWindowCount(systems.size);
-    for (let i = 0; i < warp; i++) {
-      const stepDt = warp > 1 ? 1 / 60 : dt;
-      simTime += stepDt;
-      for (const system of systems.values()) system.update(stepDt, simTime);
+
+    const due = sharedSteps();
+    let pending = due - doneSteps;
+    if (pending > MAX_STEPS_PER_FRAME) {
+      doneSteps = due - MAX_STEPS_PER_FRAME;
+      pending = MAX_STEPS_PER_FRAME;
     }
+    for (let i = 0; i < pending; i++) {
+      const simTime = (doneSteps + i + 1) * STEP_DT;
+      for (const system of systems.values()) system.update(STEP_DT, simTime);
+    }
+    doneSteps = due;
 
     composer.render();
     requestAnimationFrame(animate);

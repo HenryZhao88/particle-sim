@@ -35,7 +35,7 @@ export const getAllWindowsFromString = (localStorageValue) => {
 export const addNewWindow = (id) => {
   const shapePositions = {
     x: window.screenLeft,
-    y: window.screenTop,
+    y: window.screenTop + (window.outerHeight - window.innerHeight),
     width: window.innerWidth,
     height: window.innerHeight,
   };
