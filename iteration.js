@@ -17,7 +17,9 @@ export default function getSimParams() {
     friction: num(params, 'friction', 0.965),
     // Number of simulation sub-steps per frame
     steps: Math.max(1, Math.round(num(params, 'steps', 2))),
-    // Number of particles
-    particles: Math.max(0, Math.round(num(params, 'particles', 3500)))
+    // Number of ambient swarm particles
+    particles: Math.max(0, Math.round(num(params, 'particles', 1500))),
+    // Bloom strength
+    bloom: Math.max(0, num(params, 'bloom', 0.9))
   };
 }

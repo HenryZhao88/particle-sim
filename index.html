@@ -123,11 +123,18 @@
 
   <div id="error"></div>
 
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.142.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.142.0/examples/jsm/"
+      }
+    }
+  </script>
   <script type="module">
-    import * as THREE from 'https://unpkg.com/three@0.142.0/build/three.module.js';
     import init from './main.js';
 
-    init(THREE).catch((err) => {
+    init().catch((err) => {
       console.error(err);
       const el = document.getElementById('error');
       el.style.display = 'grid';
