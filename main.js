@@ -1,24 +1,18 @@
 // main.js
-// Vanilla port of multitab-particle-bridge src/App.tsx + PixelCamera.tsx
-// + GlowingEffect.tsx (c) 2025 Kovalenko Dmytro, MIT — see README.
-// Every open window is a particle sphere in shared screen space, with
-// particle bridges flowing between all pairs of windows.
+// Every open window is a swirling sphere of GPU dust in shared screen
+// space, joined to the other windows by thin tapered funnels of the same
+// dust. Window sync (localStorage store, storage events, ping/pong
+// cleanup) follows multitab-particle-bridge (c) 2025 Kovalenko Dmytro,
+// MIT — see README.
 
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
-import ParticleSphere from './components/ParticleSphere.js';
-import ParticleBridge from './components/ParticleBridge.js';
+import ParticleSystem from './components/ParticleSystem.js';
 import { tryToInitialize } from './helpers/sceneInitHelpers.js';
-import { getAllBridgesBetweenSpheres, getSphereModelsFromWindows } from './helpers/utils.js';
-import { OUTER_SPHERE_RADIUS } from './constants.js';
-
-// PixelCamera constants
-const NEAR = 0.1;
-const FAR = 1000;
-const CAMERA_Z = 1000;
+import { getSphereModelsFromWindows } from './helpers/utils.js';
 
 export default function init() {
   const windowId = crypto.randomUUID();
@@ -26,12 +20,13 @@ export default function init() {
   const setWindows = (next) => { windows = next; };
 
   const cleanupFunctions = [];
-  tryToInitialize(windowId, setWindows, cleanupFunctions);
+  // ?force=1 skips the visibility gate (useful when testing in background tabs)
+  const force = new URLSearchParams(window.location.search).has('force');
+  tryToInitialize(windowId, setWindows, cleanupFunctions, force);
   document.addEventListener('visibilitychange', () => {
     tryToInitialize(windowId, setWindows, cleanupFunctions);
   });
 
-  // Renderer + scene (GlowingEffect: black background + bloom)
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(window.devicePixelRatio);
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -39,21 +34,20 @@ export default function init() {
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color('black');
-  scene.add(new THREE.AmbientLight());
 
-  // PixelCamera: orthographic, pixel units, y-up, looking down -z
+  // Pixel-unit orthographic camera, y-up; wide z range so the 3D dust
+  // never clips.
   const camera = new THREE.OrthographicCamera(
-    0, window.innerWidth, window.innerHeight, 0, NEAR, FAR
+    0, window.innerWidth, window.innerHeight, 0, -10000, 10000
   );
-  camera.position.set(0, 0, CAMERA_Z);
 
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
   composer.addPass(new UnrealBloomPass(
     new THREE.Vector2(window.innerWidth, window.innerHeight),
-    1.0, // intensity
-    0.6, // radius
-    0.0  // luminanceThreshold
+    0.7,  // strength
+    0.5,  // radius
+    0.0   // threshold
   ));
 
   window.addEventListener('resize', () => {
@@ -64,60 +58,46 @@ export default function init() {
     camera.updateProjectionMatrix();
   });
 
-  // Scene entities, keyed the same way React keys the components
-  const sphereEntities = new Map(); // window id → ParticleSphere
-  const bridgeEntities = new Map(); // "fromId-toId" → ParticleBridge
+  const systems = new Map(); // window id → ParticleSystem
 
   function syncEntities() {
     if (!windows || !windows[windowId]) return;
 
-    const spheres = getSphereModelsFromWindows(windows, windowId);
-    const bridges = getAllBridgesBetweenSpheres(spheres);
+    const models = getSphereModelsFromWindows(windows, windowId);
+    const ids = new Set();
 
-    const sphereIds = new Set();
-    for (const { id, center, color } of spheres) {
-      sphereIds.add(id);
-      let entity = sphereEntities.get(id);
-      if (!entity) {
-        entity = new ParticleSphere(scene, { radius: OUTER_SPHERE_RADIUS, center, color });
-        sphereEntities.set(id, entity);
+    for (const model of models) {
+      ids.add(model.id);
+      let system = systems.get(model.id);
+      if (!system) {
+        system = new ParticleSystem(renderer, scene, model);
+        systems.set(model.id, system);
       }
-      entity.setCenter(center);
+      system.setModel(model.center, model.radius);
+      system.setOthers(models.filter((m) => m.id !== model.id));
     }
-    for (const [id, entity] of sphereEntities) {
-      if (!sphereIds.has(id)) {
-        entity.dispose();
-        sphereEntities.delete(id);
-      }
-    }
-
-    const bridgeIds = new Set();
-    for (const { id, from, to, color } of bridges) {
-      bridgeIds.add(id);
-      let entity = bridgeEntities.get(id);
-      if (!entity) {
-        entity = new ParticleBridge(scene, { from, to, color });
-        bridgeEntities.set(id, entity);
-      }
-      entity.setEndpoints(from, to);
-    }
-    for (const [id, entity] of bridgeEntities) {
-      if (!bridgeIds.has(id)) {
-        entity.dispose();
-        bridgeEntities.delete(id);
+    for (const [id, system] of systems) {
+      if (!ids.has(id)) {
+        system.dispose();
+        systems.delete(id);
       }
     }
   }
 
   const clock = new THREE.Clock();
+  // ?warp=N runs N fixed sim substeps per frame (dev: evolve the sim fast)
+  const warp = Math.max(1, parseInt(new URLSearchParams(window.location.search).get('warp'), 10) || 1);
+  let simTime = 0;
 
   function animate() {
-    const delta = clock.getDelta();
-    const time = clock.getElapsedTime();
+    const dt = Math.min(clock.getDelta(), 1 / 30);
 
     syncEntities();
-    for (const sphere of sphereEntities.values()) sphere.update(delta);
-    for (const bridge of bridgeEntities.values()) bridge.update(time, delta);
+    for (let i = 0; i < warp; i++) {
+      const stepDt = warp > 1 ? 1 / 60 : dt;
+      simTime += stepDt;
+      for (const system of systems.values()) system.update(stepDt, simTime);
+    }
 
     composer.render();
     requestAnimationFrame(animate);

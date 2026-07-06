@@ -81,8 +81,8 @@ const createBeforeUnloadListener = (windowId, cleanupFunctions) => {
   });
 };
 
-export const tryToInitialize = (windowId, setWindows, cleanupFunctions) => {
-  if (isInitialized || document.visibilityState !== 'visible') return;
+export const tryToInitialize = (windowId, setWindows, cleanupFunctions, force = false) => {
+  if (isInitialized || (!force && document.visibilityState !== 'visible')) return;
 
   // Add the new window to the local storage and set the initial state
   const allWindows = addNewWindow(windowId);

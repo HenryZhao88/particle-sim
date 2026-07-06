@@ -27,8 +27,9 @@ export const getSphereModelsFromWindows = (windows, currentWindowId) => {
     const centerX = -currentWindowShape.x + x + width / 2;
     const centerY = currentWindowShape.y - y + currentWindowShape.height - height + height / 2;
     const center = [centerX, centerY, 0];
+    const radius = 0.3 * Math.min(width, height);
 
-    return { center, color, id };
+    return { center, color, id, radius };
   });
 };
 
