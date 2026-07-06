@@ -20,6 +20,10 @@ Open `http://localhost:8000` in two or more windows and drag them around.
 Dev parameters: `?force=1` skips the visibility gate (background-tab testing),
 `?warp=N` runs N simulation substeps per frame.
 
+The command dock includes `New window`, speed controls, and `Beauty` mode.
+Keyboard shortcuts: `N` opens a new window, `H` or `B` hides/shows the UI,
+`-` and `+` adjust speed, and `0` resets speed.
+
 ## Credits
 
 - Window synchronization (localStorage store, storage events, ping/pong

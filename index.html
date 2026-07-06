@@ -4,10 +4,186 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Particle Simulation</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='black'/%3E%3Ccircle cx='8' cy='8' r='4' fill='white'/%3E%3C/svg%3E" />
   <style>
     * { margin: 0; padding: 0; }
     html, body { width: 100%; height: 100%; overflow: hidden; background: black; }
     canvas { display: block; }
+
+    body {
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #f8fafc;
+    }
+
+    .command-ui {
+      position: fixed;
+      left: 16px;
+      bottom: 16px;
+      z-index: 10;
+      width: min(360px, calc(100vw - 32px));
+      padding: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 8px;
+      background: rgba(5, 8, 14, 0.76);
+      box-shadow: 0 18px 60px rgba(0, 0, 0, 0.38);
+      backdrop-filter: blur(18px);
+      transition: opacity 180ms ease, transform 180ms ease;
+    }
+
+    .ui-hidden .command-ui {
+      display: none;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(10px);
+    }
+
+    .command-ui__header,
+    .command-ui__actions,
+    .command-ui__stepper,
+    .command-ui__shortcuts,
+    .command-ui__shortcuts div {
+      display: flex;
+      align-items: center;
+    }
+
+    .command-ui__header {
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .command-ui__eyebrow {
+      color: rgba(248, 250, 252, 0.66);
+      font-size: 11px;
+      line-height: 1.2;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    .command-ui__status {
+      margin-top: 3px;
+      color: #ffffff;
+      font-size: 17px;
+      font-weight: 650;
+      line-height: 1.2;
+    }
+
+    .command-ui__actions {
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+
+    .command-ui__button,
+    .command-ui__icon-button {
+      height: 34px;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.12);
+      color: #ffffff;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 650;
+      letter-spacing: 0;
+      cursor: pointer;
+    }
+
+    .command-ui__button {
+      padding: 0 12px;
+      min-width: 104px;
+    }
+
+    .command-ui__button--quiet {
+      min-width: 76px;
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .command-ui__icon-button {
+      width: 34px;
+      flex: 0 0 34px;
+      font-size: 18px;
+      line-height: 1;
+    }
+
+    .command-ui__button:hover,
+    .command-ui__icon-button:hover,
+    .command-ui__button:focus-visible,
+    .command-ui__icon-button:focus-visible {
+      border-color: rgba(255, 255, 255, 0.52);
+      background: rgba(255, 255, 255, 0.18);
+      outline: none;
+    }
+
+    .command-ui__stepper {
+      height: 34px;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.06);
+    }
+
+    .command-ui__stepper .command-ui__icon-button {
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+    }
+
+    .command-ui__stepper output {
+      width: 44px;
+      color: rgba(255, 255, 255, 0.88);
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 34px;
+      text-align: center;
+    }
+
+    .command-ui__shortcuts {
+      gap: 8px 10px;
+      flex-wrap: wrap;
+    }
+
+    .command-ui__shortcuts div {
+      gap: 5px;
+      min-width: 0;
+    }
+
+    .command-ui__shortcuts dt {
+      min-width: 24px;
+      padding: 2px 5px;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 5px;
+      color: rgba(255, 255, 255, 0.9);
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1.25;
+      text-align: center;
+    }
+
+    .command-ui__shortcuts dd {
+      color: rgba(248, 250, 252, 0.62);
+      font-size: 11px;
+      line-height: 1.25;
+      white-space: nowrap;
+    }
+
+    @media (max-width: 420px) {
+      .command-ui {
+        left: 10px;
+        right: 10px;
+        bottom: 10px;
+        width: auto;
+        padding: 12px;
+      }
+
+      .command-ui__button {
+        flex: 1 1 120px;
+      }
+
+      .command-ui__stepper {
+        flex: 1 1 132px;
+        justify-content: space-between;
+      }
+    }
   </style>
 </head>
 <body>

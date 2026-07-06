@@ -95,14 +95,45 @@ float smin(float a, float b, float k){
   return mix(b, a, h) - k * h * (1.0 - h);
 }
 
-// Horn: wide at the sphere, necks to a thin waist, reopens at the far swirl.
+float bridgeRadius(float ra, float rb, float t){
+  float nearR = max(10.0, ra * 0.12);
+  float farR = max(10.0, rb * 0.24);
+  float waist = 1.0 - 0.18 * sin(3.14159 * t);
+  return mix(nearR, farR, smoothstep(0.0, 1.0, t)) * waist;
+}
+
+// Straight tube between window centers; the sphere union hides the inner span.
 float sdFunnel(vec3 p, vec3 a, vec3 b, float ra, float rb){
   vec3 ab = b - a;
-  float t = clamp(dot(p - a, ab) / dot(ab, ab), 0.0, 1.0);
-  float r = max(
-    mix(ra * 0.8, 6.0, smoothstep(0.0, 0.45, t)),
-    mix(6.0, rb * 0.9, smoothstep(0.65, 1.0, t)));
+  float t = clamp(dot(p - a, ab) / max(dot(ab, ab), 1.0), 0.0, 1.0);
+  float r = bridgeRadius(ra, rb, t);
   return distance(p, a + ab * t) - r;
+}
+
+vec4 nearestBridgeRail(vec3 p){
+  vec3 closest = p;
+  float bestDist = 1e20;
+  float bestRadius = 1.0;
+
+  for (int i = 0; i < ${MAX_OTHERS}; i++){
+    if (i >= uOtherCount) break;
+    vec3 c = uOthers[i];
+    float rin = uOtherInner[i];
+    if (distance(uOwn, c) > uRadius){
+      vec3 ab = c - uOwn;
+      float t = clamp(dot(p - uOwn, ab) / max(dot(ab, ab), 1.0), 0.0, 1.0);
+      vec3 q = uOwn + ab * t;
+      float distToRail = distance(p, q);
+      if (distToRail < bestDist){
+        closest = q;
+        bestDist = distToRail;
+        bestRadius = bridgeRadius(uRadius, rin, t);
+      }
+    }
+  }
+
+  float influence = 1.0 - smoothstep(bestRadius * 1.25, bestRadius * 7.0 + 24.0, bestDist);
+  return vec4(closest, influence);
 }
 
 float sdf(vec3 p){
@@ -112,8 +143,8 @@ float sdf(vec3 p){
     vec3 c = uOthers[i];
     float rin = uOtherInner[i];
     if (distance(uOwn, c) > uRadius){
-      d = smin(d, sdFunnel(p, uOwn, c, uRadius, rin), 50.0);
-      d = smin(d, length(p - c) - rin, 50.0);
+      d = smin(d, sdFunnel(p, uOwn, c, uRadius, rin), 28.0);
+      d = smin(d, length(p - c) - rin, 28.0);
     }
   }
   return d;
@@ -135,6 +166,7 @@ void main(){
 
   // Spring toward the implicit surface.
   float d = sdf(pos);
+  vec4 bridgeRail = nearestBridgeRail(pos);
   vec2 k = vec2(1.0, -1.0);
   const float h = 2.0;
   vec3 n = normalize(
@@ -143,9 +175,11 @@ void main(){
     k.yxy * sdf(pos + k.yxy * h) +
     k.xxx * sdf(pos + k.xxx * h) + vec3(1e-6));
   vel += -n * clamp(d, -300.0, 300.0) * 14.0 * uDt;
+  vel += (bridgeRail.xyz - pos) * 7.0 * bridgeRail.w * uDt;
 
-  // Wispy filaments: curl noise advection.
-  vel += curlNoise(pos * (1.0 / 140.0) + vec3(uSeed) + uTime * 0.05) * 420.0 * uDt;
+  // Wispy filaments; quieter around bridge rails so the bridge reads straight.
+  float curlStrength = mix(420.0, 210.0, bridgeRail.w);
+  vel += curlNoise(pos * (1.0 / 140.0) + vec3(uSeed) + uTime * 0.05) * curlStrength * uDt;
 
   // Coherent rotation, strongest on the shell.
   vec3 rel = pos - uOwn;
