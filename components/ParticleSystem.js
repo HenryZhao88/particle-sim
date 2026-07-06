@@ -209,6 +209,7 @@ uniform float uTime;
 uniform float uDt;
 uniform vec3 uOwn;
 uniform float uRadius;
+uniform float uRecycleRadius;
 
 float hash12(vec2 p){
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -223,8 +224,8 @@ void main(){
 
   pos += vel * uDt;
 
-  // Recycle strays and numeric blowups onto the shell.
-  if (!(length(pos - uOwn) < uRadius * 8.0)){
+  // Recycle strays and numeric blowups, but keep long bridge spans alive.
+  if (!(length(pos - uOwn) < uRecycleRadius)){
     float a = hash12(uv + fract(uTime)) * 6.28318;
     float z = hash12(uv.yx + fract(uTime * 0.7)) * 2.0 - 1.0;
     float rr = sqrt(max(0.0, 1.0 - z * z));
@@ -327,7 +328,8 @@ export default class ParticleSystem {
       uTime: { value: 0 },
       uDt: { value: 0 },
       uOwn: { value: new THREE.Vector3(...center) },
-      uRadius: { value: radius }
+      uRadius: { value: radius },
+      uRecycleRadius: { value: radius * 8 }
     });
 
     const error = this.gpu.init();
@@ -379,11 +381,26 @@ export default class ParticleSystem {
   /** The other windows' spheres: [{ center, radius }] */
   setOthers(others) {
     const n = Math.min(others.length, MAX_OTHERS);
+    const own = this.posUniforms.uOwn.value;
+    const ownRadius = this.posUniforms.uRadius.value;
+    let recycleRadius = ownRadius * 8;
+
     for (let i = 0; i < n; i++) {
       this.velUniforms.uOthers.value[i].set(...others[i].center);
       this.velUniforms.uOtherInner.value[i] = others[i].radius * 0.35;
+
+      const [x, y, z] = others[i].center;
+      const dx = x - own.x;
+      const dy = y - own.y;
+      const dz = z - own.z;
+      const distanceToOther = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      recycleRadius = Math.max(
+        recycleRadius,
+        distanceToOther + ownRadius + others[i].radius + 420
+      );
     }
     this.velUniforms.uOtherCount.value = n;
+    this.posUniforms.uRecycleRadius.value = recycleRadius;
   }
 
   update(dt, time) {
