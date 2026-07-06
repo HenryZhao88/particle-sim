@@ -1,6 +1,6 @@
 // shader.vert
-// Simple pass-through vertex shader for fullscreen quad
+// Fullscreen quad: geometry is already in NDC (-1..1), so skip the matrices.
 
 void main() {
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    gl_Position = vec4(position.xy, 1.0, 1.0);
 }
