@@ -2,7 +2,20 @@
 // Syncs this window's screen-space position (and blob appearance) with every
 // other open window of the app via a BroadcastChannel.
 
+import { COLORS, COLOR_COUNTER_KEY } from './constants.js';
+
 const PEER_TIMEOUT_MS = 1200; // drop peers we haven't heard from in this long
+
+/**
+ * Round-robin palette assignment shared across windows via localStorage,
+ * so simultaneous windows get distinct colors.
+ */
+export function pickColor() {
+  let counter = parseInt(localStorage.getItem(COLOR_COUNTER_KEY), 10);
+  if (!Number.isFinite(counter)) counter = 0;
+  localStorage.setItem(COLOR_COUNTER_KEY, String(counter + 1));
+  return COLORS[counter % COLORS.length];
+}
 
 /**
  * This window's content area in screen coordinates. screenX/screenY point at
@@ -34,12 +47,11 @@ class WindowManager {
     this._startBroadcast();
   }
 
-  /** Register the local blob's appearance so peers can render it. */
+  /** Register the local window's appearance so peers can render it. */
   setLocalBlob(blob) {
     this.meta = {
-      color: blob.color,
-      radius: blob.radius,
-      strength: blob.strength
+      color: blob.color,       // hex string, e.g. '#4dfff0'
+      strength: blob.strength  // swarm attraction weight
     };
     this._broadcast();
   }
